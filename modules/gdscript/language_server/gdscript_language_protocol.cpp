@@ -38,6 +38,8 @@
 GDScriptLanguageProtocol *GDScriptLanguageProtocol::singleton = nullptr;
 
 Error GDScriptLanguageProtocol::LSPeer::handle_data() {
+	print_line("Handling data");
+
 	int read = 0;
 	// Read headers
 	if (!has_header) {
@@ -54,6 +56,7 @@ Error GDScriptLanguageProtocol::LSPeer::handle_data() {
 			}
 			char *r = (char *)req_buf;
 			int l = req_pos;
+			print_line(vformat("Reading %s", r));
 
 			// End of headers
 			if (l > 3 && r[l] == '\n' && r[l - 1] == '\r' && r[l - 2] == '\n' && r[l - 3] == '\r') {
@@ -87,6 +90,7 @@ Error GDScriptLanguageProtocol::LSPeer::handle_data() {
 		// Parse data
 		String msg;
 		msg.parse_utf8((const char *)req_buf, req_pos);
+		print_line("Parse data: " + msg);
 
 		// Reset to read again
 		req_pos = 0;
@@ -138,6 +142,7 @@ void GDScriptLanguageProtocol::on_client_disconnected(const int &p_client_id) {
 }
 
 String GDScriptLanguageProtocol::process_message(const String &p_text) {
+	print_line("Processing message: " + p_text);
 	String ret = process_string(p_text);
 	if (ret.empty()) {
 		return ret;

@@ -56,6 +56,8 @@
 #include "main/splash.gen.h"
 #include "main/tests/test_main.h"
 #include "modules/register_module_types.h"
+#include "modules/gdscript/gdscript_parser.h"
+#include "modules/gdscript/gdscript_compiler.h"
 #include "platform/register_platform_apis.h"
 #include "scene/debugger/script_debugger_remote.h"
 #include "scene/main/scene_tree.h"
@@ -232,6 +234,8 @@ void finalize_navigation_server() {
 	navigation_2d_server = nullptr;
 }
 
+Error process_project_lint();
+
 //#define DEBUG_INIT
 #ifdef DEBUG_INIT
 #define MAIN_PRINT(m_txt) print_line(m_txt)
@@ -333,6 +337,7 @@ void Main::print_help(const char *p_binary) {
 	OS::get_singleton()->print("Standalone tools:\n");
 	OS::get_singleton()->print("  -s, --script <script>            Run a script.\n");
 	OS::get_singleton()->print("  --check-only                     Only parse for errors and quit (use with --script).\n");
+	OS::get_singleton()->print("  --lint                           Check all scripts in the project.\n");
 #ifdef TOOLS_ENABLED
 	OS::get_singleton()->print("  --export <preset> <path>         Export the project using the given preset and matching release template. The preset name should match one defined in export_presets.cfg.\n");
 	OS::get_singleton()->print("                                   <path> should be absolute or relative to the project directory, and include the filename for the binary (e.g. 'builds/game.exe'). The target directory should exist.\n");
@@ -1598,6 +1603,7 @@ bool Main::start() {
 	String script;
 	String test;
 	bool check_only = false;
+	bool lint = false;
 
 #ifdef TOOLS_ENABLED
 	bool doc_base = true;
@@ -1616,6 +1622,8 @@ bool Main::start() {
 #ifdef TOOLS_ENABLED
 		} else if (args[i] == "--no-docbase") {
 			doc_base = false;
+		} else if (args[i] == "--lint") {
+			lint = true;
 		} else if (args[i] == "-e" || args[i] == "--editor") {
 			editor = true;
 		} else if (args[i] == "-p" || args[i] == "--project-manager") {
@@ -1891,6 +1899,12 @@ bool Main::start() {
 							ScriptServer::get_language(i)->add_global_constant(name, Variant());
 						}
 					}
+				}
+
+				if (lint) {
+					process_project_lint();
+					memdelete(main_loop);
+					return false;
 				}
 
 				//second pass, load into global constants
@@ -2539,4 +2553,105 @@ void Main::cleanup(bool p_force) {
 #ifdef RID_HANDLES_ENABLED
 	g_rid_database.shutdown();
 #endif
+}
+
+Error process_project_lint() {
+	bool has_warns = false;
+
+	DirAccess* da = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
+	Vector<String> files;
+	Vector<String> dirs;
+	dirs.push_back(".");
+
+	while (!dirs.empty()) {
+		String target_dir = dirs[0];
+		dirs.remove(0);
+		da->change_dir(target_dir);
+		da->list_dir_begin();
+		String current_dir = da->get_current_dir();
+
+		while (true) {
+			String f = da->get_next();
+
+			if (f == "") {
+				break;
+			}
+
+			if (da->current_is_hidden()) {
+				continue;
+			}
+
+			if (da->current_is_dir()) {
+				if (f.begins_with(".")) { // Ignore special and . / ..
+					continue;
+				}
+
+				dirs.push_back(current_dir + "/" + f);
+			} else {
+				// Only fetch gdscript files
+				if (f.get_extension() == "gd") {
+					files.push_back(current_dir + "/" + f);
+				}
+			}
+		}
+
+		da->list_dir_end();
+	}
+	memdelete(da);
+
+	files.sort();
+
+	for (int i = 0; i < files.size(); ++i) {
+		String file = files[i];
+
+		Ref<Script> script_res = ResourceLoader::load(file);
+		if (script_res.is_null()) {
+			print_error("Could not load script: " + file);
+			has_warns = true;
+			continue;
+		}
+
+		if (!script_res->is_valid()) {
+			print_error("Script is not valid: " + file);
+			has_warns = true;
+			continue;
+		}
+
+		// RELOAD
+
+		String source = script_res->get_source_code();
+		String path = script_res->get_path();
+		String basedir = script_res->get_path();
+
+		if (basedir != "") {
+			basedir = basedir.get_base_dir();
+		}
+
+		if (source.find("%BASE%") != -1) {
+			//loading a template, don't parse
+			continue;
+		}
+
+		GDScriptParser parser;
+		Error err = parser.parse(source, basedir, false, path);
+		if (err) {
+			print_error("Parse error on file: " + file);
+			has_warns = true;
+			continue;
+		}
+
+		for (const List<GDScriptWarning>::Element *E = parser.get_warnings().front(); E; E = E->next()) {
+			const GDScriptWarning &warning = E->get();
+			print_error(vformat("%s:%d: %s (%s)", file, warning.line, warning.get_message(), warning.get_name()));
+			has_warns = true;
+		}
+
+		if (has_warns) {
+			OS::get_singleton()->set_exit_code(EXIT_FAILURE);
+		} else {
+			OS::get_singleton()->set_exit_code(EXIT_SUCCESS);
+		}
+	}
+
+	return OK;
 }

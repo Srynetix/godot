@@ -521,6 +521,7 @@ void GDScriptWorkspace::publish_diagnostics(const String &p_path) {
 	}
 	params["diagnostics"] = errors;
 	params["uri"] = get_file_uri(p_path);
+	print_line("Will publish diagnostics");
 	GDScriptLanguageProtocol::get_singleton()->notify_client("textDocument/publishDiagnostics", params);
 }
 
